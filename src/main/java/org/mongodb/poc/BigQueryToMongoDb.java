@@ -19,11 +19,13 @@ import org.apache.beam.sdk.transforms.ParDo;
 import org.bson.Document;
 import java.util.List;
 import java.util.ArrayList;
+import java.util.Date;
 import com.google.api.gax.rpc.InvalidArgumentException;
 import java.io.IOException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.apache.avro.Schema;
+import org.apache.avro.LogicalType;
 import org.apache.avro.Schema.Field;
 import org.apache.avro.generic.GenericRecord;
 import org.apache.avro.generic.GenericData.Record;
@@ -167,7 +169,7 @@ public class BigQueryToMongoDb {
 					String key = field.name();
 					Object value = row.get(key);
 					if (!key.equals("_id")) {
-					    doc.append(key, processValue(value));
+					    doc.append(key, processValue(value, field.schema()));
 					}
 				    }
 				    c.output(doc);
@@ -182,23 +184,25 @@ public class BigQueryToMongoDb {
 	return true;
     }
 
-    private static Object processValue(Object value) {
+    private static Object processValue(Object value, Schema fieldType) {
 	if (value instanceof Record)
 	    return processStruct((Record) value);
 	else if (value instanceof GenericData.Array)
 	    return processArray((GenericData.Array) value);						
 	else if (value instanceof Utf8)
 	    return value.toString();
+	else if (is_timestamp(fieldType))
+	    return value == null ? null : new Date(((Long) value) / 1000);
 	else
 	    return value;
     }
-    
+
     private static Document processStruct(Record input) {
 	Document doc = new Document();
 	for (Field field : input.getSchema().getFields()) {
 	    String key = field.name();
 	    Object value = input.get(key);
-	    doc.append(key, processValue(value));
+	    doc.append(key, processValue(value, field.schema()));
 	}
 	return doc;
     }
@@ -207,9 +211,26 @@ public class BigQueryToMongoDb {
     private static ArrayList processArray(GenericData.Array input) {
 	ArrayList arr = new ArrayList();
 	for(Object value : input) {
-	    arr.add(processValue(value));
+	    arr.add(processValue(value, input.getSchema().getElementType()));
 	};
 	return arr;
     }
+
+    private static boolean is_timestamp(Schema fieldType) {
+	boolean res = false;
+	Schema.Type type = fieldType.getType();
+	if (type == Schema.Type.LONG) {
+	    LogicalType logicalType = fieldType.getLogicalType();
+	    res = logicalType != null && "timestamp-micros".equals(logicalType.getName());
+	} else if(type == Schema.Type.UNION) {
+	    for(Schema s: fieldType.getTypes()) {
+		LogicalType lt = s.getLogicalType();
+		if(lt != null && "timestamp-micros".equals(lt.getName()))
+		   res = true;
+	    }
+	}
+	return res;
+    }
+    
     
 }
